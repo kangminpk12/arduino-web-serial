@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>p5.js × Arduino LED 밝기 조절</title>
+<meta name="description" content="p5.js와 Web Serial로 Arduino Uno R3의 LED를 켜고 끄고 밝기(PWM)를 조절하는 과제 — 코드 설명">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#070b16;
+  --ink:#eef3ff;
+  --ink-2:rgba(230,238,255,.72);
+  --ink-3:rgba(230,238,255,.5);
+  --glass:rgba(255,255,255,.075);
+  --glass-2:rgba(255,255,255,.13);
+  --edge:rgba(255,255,255,.22);
+  --edge-hi:rgba(255,255,255,.55);
+  --green:#22c55e;
+  --green-2:#86efac;
+  --slate:#64748b;
+  --blue:#60a5fa;
+  --violet:#a78bfa;
+  --amber:#fbbf24;
+  --code-bg:rgba(6,10,22,.55);
+  --r-lg:28px; --r-md:18px; --r-sm:12px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:'Noto Sans KR',system-ui,sans-serif;line-height:1.7;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+/* ---------- 배경: 유리 뒤에서 움직이는 빛 ---------- */
+.aurora{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.aurora i{position:absolute;border-radius:50%;filter:blur(70px);opacity:.55;animation:drift 22s ease-in-out infinite alternate}
+.aurora i:nth-child(1){width:46vw;height:46vw;left:-8vw;top:-10vw;background:radial-gradient(circle,#16a34a 0%,transparent 65%)}
+.aurora i:nth-child(2){width:40vw;height:40vw;right:-10vw;top:10vh;background:radial-gradient(circle,#2563eb 0%,transparent 65%);animation-duration:26s}
+.aurora i:nth-child(3){width:38vw;height:38vw;left:25vw;bottom:-14vw;background:radial-gradient(circle,#7c3aed 0%,transparent 65%);animation-duration:30s}
+.aurora i:nth-child(4){width:22vw;height:22vw;right:18vw;bottom:8vh;background:radial-gradient(circle,#0ea5e9 0%,transparent 65%);animation-duration:18s}
+.aurora::after{content:"";position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.06) 1px,transparent 1px);background-size:22px 22px;mask-image:linear-gradient(#000,transparent 80%)}
+@keyframes drift{to{transform:translate(6vw,5vh) scale(1.15)}}
+@media (prefers-reduced-motion:reduce){.aurora i{animation:none}}
+
+/* ---------- 리퀴드 글래스 ---------- */
+.glass{
+  position:relative;isolation:isolate;
+  background:linear-gradient(145deg,var(--glass-2),var(--glass) 55%,rgba(255,255,255,.04));
+  -webkit-backdrop-filter:blur(24px) saturate(180%);
+  backdrop-filter:blur(24px) saturate(180%);
+  border:1px solid var(--edge);
+  border-radius:var(--r-lg);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    inset 0 -1px 0 rgba(255,255,255,.08),
+    inset 0 0 24px rgba(255,255,255,.04),
+    0 18px 50px rgba(0,0,0,.35);
+}
+.glass::before{ /* 위쪽 반사광 */
+  content:"";position:absolute;inset:0;border-radius:inherit;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(120% 60% at 15% 0%,rgba(255,255,255,.18),transparent 55%),
+    radial-gradient(80% 50% at 100% 100%,rgba(255,255,255,.06),transparent 60%);
+}
+.glass::after{ /* 가장자리 굴절 테두리 */
+  content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;
+  background:linear-gradient(135deg,rgba(255,255,255,.7),rgba(255,255,255,0) 30%,rgba(255,255,255,0) 70%,rgba(255,255,255,.35));
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+}
+.pill{border-radius:999px}
+
+/* ---------- 레이아웃 ---------- */
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+nav.top{position:sticky;top:14px;z-index:20;margin:14px auto 0;max-width:1120px;padding:0 20px}
+nav.top .bar{display:flex;align-items:center;gap:6px;padding:8px 10px 8px 18px;overflow-x:auto;scrollbar-width:none}
+nav.top .bar::-webkit-scrollbar{display:none}
+nav.top .brand{font-weight:900;letter-spacing:-.02em;margin-right:auto;white-space:nowrap;display:flex;align-items:center;gap:8px}
+nav.top .dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green)}
+nav.top a{color:var(--ink-2);text-decoration:none;font-size:14px;padding:6px 12px;border-radius:999px;white-space:nowrap;transition:.2s}
+nav.top a:hover{background:rgba(255,255,255,.12);color:var(--ink)}
+
+section{padding:72px 0 8px;scroll-margin-top:70px}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;font:500 13px 'IBM Plex Mono',monospace;color:var(--green-2);letter-spacing:.08em;text-transform:uppercase}
+.eyebrow b{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:rgba(34,197,94,.16);border:1px solid rgba(134,239,172,.4);color:var(--green-2);font-weight:500}
+h1,h2,h3{letter-spacing:-.025em;line-height:1.25;margin:0}
+h2{font-size:clamp(26px,3.4vw,36px);font-weight:900;margin:14px 0 10px}
+h3{font-size:19px;font-weight:700}
+.lead{color:var(--ink-2);font-size:17px;max-width:720px;margin:0 0 28px}
+p{margin:0 0 12px}
+code.i{font-family:'IBM Plex Mono',monospace;font-size:.88em;padding:1px 7px;border-radius:7px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.14);color:#dbeafe;white-space:nowrap}
+
+/* ---------- HERO ---------- */
+.hero{padding:56px 0 20px}
+.hero .card{display:grid;grid-template-columns:1.25fr 1fr;gap:28px;padding:44px;align-items:center}
+.hero h1{font-size:clamp(34px,5.2vw,58px);font-weight:900;margin:14px 0 14px}
+.hero h1 em{font-style:normal;background:linear-gradient(90deg,#86efac,#60a5fa 60%,#c4b5fd);-webkit-background-clip:text;background-clip:text;color:transparent}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 26px}
+.chip{font-size:13px;padding:5px 12px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);color:var(--ink-2)}
+.btns{display:flex;flex-wrap:wrap;gap:10px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:999px;font-weight:700;font-size:15px;text-decoration:none;color:var(--ink);transition:transform .2s}
+.btn:hover{transform:translateY(-2px)}
+.btn.primary{background:linear-gradient(180deg,rgba(74,222,128,.55),rgba(22,163,74,.55));border:1px solid rgba(187,247,208,.6);box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 10px 30px rgba(34,197,94,.3)}
+.btn.ghost{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}
+
+/* 미니 p5 화면 재현 */
+.mock{padding:22px;text-align:center}
+.mock .screen{background:rgba(242,246,250,.92);color:#19283c;border-radius:16px;padding:18px 14px 14px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+.mock .t1{font-size:17px;font-weight:500}
+.mock .t2{font-size:11.5px;opacity:.8;margin-bottom:10px;font-family:'IBM Plex Mono',monospace}
+.led{width:110px;height:110px;border-radius:50%;margin:6px auto 8px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:20px;transition:background .15s,box-shadow .15s;cursor:pointer;user-select:none}
+.mock .t3{font-size:12px;opacity:.75}
+.mock .t4{font-size:16px;font-weight:700;margin-top:2px}
+.mock input[type=range]{width:100%;margin-top:14px;accent-color:var(--green)}
+.mock .lbl{display:flex;justify-content:space-between;font-size:12px;color:var(--ink-2);margin-top:4px}
+.tx{margin-top:12px;font:500 13px 'IBM Plex Mono',monospace;color:var(--green-2);min-height:20px}
+
+/* ---------- 카드 그리드 ---------- */
+.grid{display:grid;gap:16px}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:repeat(2,1fr)}
+.feat{padding:24px}
+.feat .ico{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;margin-bottom:14px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.22);box-shadow:inset 0 1px 0 rgba(255,255,255,.4)}
+.feat p{color:var(--ink-2);font-size:15px;margin:8px 0 0}
+.feat .msg{margin-top:12px}
+
+/* ---------- 회로 ---------- */
+.circuit{display:grid;grid-template-columns:1.35fr 1fr;gap:16px}
+.circuit figure{margin:0;padding:12px}
+.circuit img{width:100%;display:block;border-radius:18px;background:#fff}
+.circuit figcaption{font-size:13px;color:var(--ink-3);text-align:center;padding-top:8px}
+.path{padding:24px}
+.path ol{list-style:none;padding:0;margin:14px 0 0;position:relative}
+.path ol::before{content:"";position:absolute;left:17px;top:18px;bottom:18px;width:2px;background:linear-gradient(var(--green),var(--slate))}
+.path li{position:relative;display:flex;gap:14px;align-items:flex-start;padding:8px 0}
+.path li .n{flex:none;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font:500 13px 'IBM Plex Mono',monospace;background:rgba(10,16,32,.8);border:1px solid rgba(255,255,255,.3);z-index:1}
+.path li b{display:block}
+.path li span{color:var(--ink-2);font-size:14px}
+
+/* PWM 파형 */
+.pwm{padding:24px;margin-top:16px;display:grid;grid-template-columns:1fr 1.4fr;gap:24px;align-items:center}
+.pwm svg{width:100%;height:auto;display:block}
+.pwm .read{font:500 14px 'IBM Plex Mono',monospace;color:var(--ink-2)}
+.pwm input{width:100%;accent-color:var(--green)}
+
+/* ---------- 통신 흐름 ---------- */
+.flow{padding:28px;display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:18px;align-items:center}
+.node{padding:20px;text-align:center;border-radius:22px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.2);box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}
+.node .k{font:500 12px 'IBM Plex Mono',monospace;color:var(--ink-3)}
+.node h3{margin:6px 0}
+.node p{font-size:13.5px;color:var(--ink-2);margin:0}
+.lanes{display:flex;flex-direction:column;gap:14px}
+.lane{position:relative;padding:12px 14px;border-radius:14px;background:rgba(0,0,0,.25);border:1px dashed rgba(255,255,255,.22)}
+.lane .dir{font-size:12px;color:var(--ink-3);display:flex;justify-content:space-between}
+.lane .msgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.tag{font:500 13px 'IBM Plex Mono',monospace;padding:3px 10px;border-radius:8px;background:rgba(34,197,94,.15);border:1px solid rgba(134,239,172,.4);color:#bbf7d0}
+.tag.b{background:rgba(96,165,250,.15);border-color:rgba(147,197,253,.45);color:#bfdbfe}
+.lane .arrow{position:absolute;top:50%;height:2px;left:-18px;right:-18px;z-index:-1;background:linear-gradient(90deg,transparent,rgba(134,239,172,.6),transparent)}
+.lane .arrow::after{content:"";position:absolute;right:0;top:-5px;border:6px solid transparent;border-left-color:rgba(134,239,172,.9)}
+.lane.back .arrow{background:linear-gradient(90deg,transparent,rgba(147,197,253,.6),transparent)}
+.lane.back .arrow::after{right:auto;left:0;border-left-color:transparent;border-right-color:rgba(147,197,253,.9)}
+.rule{margin-top:14px;padding:14px 20px;font-size:14px;color:var(--ink-2);text-align:center}
+
+/* ---------- 파일 구성 ---------- */
+.files{padding:8px}
+.file{display:grid;grid-template-columns:200px 1fr;gap:16px;padding:16px 18px;border-radius:18px;align-items:center}
+.file + .file{border-top:1px solid rgba(255,255,255,.08)}
+.file .name{font:500 15px 'IBM Plex Mono',monospace;display:flex;align-items:center;gap:10px}
+.file .name i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.file p{margin:0;color:var(--ink-2);font-size:15px}
+
+/* ---------- 코드 블록 ---------- */
+.code-row{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:16px;align-items:start;margin-bottom:16px}
+.code{padding:0;overflow:hidden}
+.code .head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.1);font:500 13px 'IBM Plex Mono',monospace;color:var(--ink-3)}
+.code .head .lights{display:flex;gap:6px;margin-right:6px}
+.code .head .lights i{width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,.25)}
+.code .head .lights i:nth-child(1){background:#f87171}.code .head .lights i:nth-child(2){background:#fbbf24}.code .head .lights i:nth-child(3){background:#4ade80}
+.code pre{margin:0;padding:14px 0;overflow-x:auto;background:var(--code-bg);font:13.5px/1.75 'IBM Plex Mono',monospace}
+.code .ln{display:flex;padding:0 16px 0 0;min-width:max-content;position:relative}
+.code .ln .no{width:30px;flex:none;text-align:right;padding-right:14px;color:rgba(255,255,255,.25);user-select:none}
+.code .ln.m{background:linear-gradient(90deg,rgba(34,197,94,.14),transparent 85%)}
+.code .ln.m::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--green)}
+.code .ln .gut{width:30px;flex:none;display:grid;place-items:center}
+.code .ln .bd{display:inline-grid;place-items:center;width:19px;height:19px;border-radius:50%;background:var(--green);color:#052e16;font:700 11px 'Noto Sans KR',sans-serif}
+.tk-c{color:#7d8ba6;font-style:italic}.tk-s{color:#fcd34d}.tk-k{color:#c4b5fd}.tk-n{color:#fda4af}.tk-f{color:#7dd3fc}.tk-b{color:#86efac}
+.notes{display:flex;flex-direction:column;gap:12px}
+.note{padding:16px 18px;border-radius:20px}
+.note .h{display:flex;align-items:center;gap:10px;font-weight:700}
+.note .h .bd{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--green);color:#052e16;font-size:12px;font-weight:900;flex:none}
+.note p{margin:6px 0 0;color:var(--ink-2);font-size:14.5px}
+.fn-title{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:40px 0 6px}
+.fn-title h3{font:500 22px 'IBM Plex Mono',monospace;letter-spacing:0}
+.fn-title .when{font-size:13px;padding:3px 10px;border-radius:999px;background:rgba(96,165,250,.15);border:1px solid rgba(147,197,253,.4);color:#bfdbfe}
+.fn-desc{color:var(--ink-2);margin:0 0 14px}
+
+/* 표 */
+.tbl{padding:6px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:560px}
+th,td{padding:12px 14px;text-align:left;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top}
+th{font-size:12.5px;color:var(--ink-3);font-weight:500;letter-spacing:.04em}
+tr:last-child td{border-bottom:0}
+td:first-child{font-family:'IBM Plex Mono',monospace;color:#7dd3fc;white-space:nowrap}
+td .new{font:700 10.5px 'Noto Sans KR';color:#052e16;background:var(--amber);padding:1px 6px;border-radius:6px;margin-left:6px;vertical-align:2px}
+
+/* 관문 흐름 (sendBrightness) */
+.gates{padding:22px;margin-bottom:16px}
+.gate-row{display:flex;align-items:stretch;gap:10px;overflow-x:auto;padding:4px 2px 8px}
+.gate{flex:1 0 140px;padding:14px;border-radius:16px;background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.16);font-size:13.5px;position:relative}
+.gate .q{font-weight:700;margin-bottom:4px}
+.gate .no{color:#fca5a5;font-size:12.5px}
+.gate.go{background:rgba(34,197,94,.14);border-color:rgba(134,239,172,.5)}
+.gate.go .q{color:#bbf7d0}
+.gate + .gate::before{content:"→";position:absolute;left:-10px;top:50%;transform:translate(-50%,-50%);color:var(--ink-3)}
+.gates .why{margin-top:10px;font-size:14px;color:var(--ink-2)}
+
+/* 비교 */
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.cmp .glass{padding:22px}
+.cmp ul{margin:10px 0 0;padding-left:18px;color:var(--ink-2);font-size:15px}
+.cmp li{margin:4px 0}
+.cmp .badge{font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.25);color:var(--ink-3)}
+.cmp .after .badge{border-color:rgba(134,239,172,.5);color:var(--green-2)}
+
+/* 영상 */
+.video{padding:12px}
+.video video{width:100%;display:block;border-radius:18px;background:#000}
+.video .cap{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;padding:12px 0 4px}
+
+footer{padding:64px 0 48px;color:var(--ink-3);font-size:14px}
+footer .glass{padding:22px 26px;display:flex;flex-wrap:wrap;gap:12px 28px;justify-content:space-between;align-items:center}
+footer a{color:var(--ink-2)}
+
+/* ---------- 반응형 ---------- */
+@media (max-width:900px){
+  .hero .card,.circuit,.code-row,.pwm,.cmp{grid-template-columns:1fr}
+  .g3{grid-template-columns:1fr}
+  .flow{grid-template-columns:1fr}
+  .lane .arrow{display:none}
+  .hero .card{padding:26px}
+  .file{grid-template-columns:1fr;gap:4px}
+}
+@media (max-width:520px){
+  .wrap,nav.top{padding:0 16px}
+  .g2{grid-template-columns:1fr}
+  section{padding-top:56px}
+}
+</style>
+</head>
+<body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+<nav class="top">
+  <div class="bar glass pill">
+    <span class="brand"><span class="dot"></span>p5 × Arduino</span>
+    <a href="#overview">개요</a>
+    <a href="#circuit">회로</a>
+    <a href="#protocol">통신</a>
+    <a href="#code">코드 설명</a>
+    <a href="#diff">바꾼 점</a>
+    <a href="#demo">시연</a>
+  </div>
+</nav>
+
+<!-- ============ HERO ============ -->
+<header class="wrap hero">
+  <div class="card glass">
+    <div>
+      <span class="eyebrow">창의설계입문 · 과제</span>
+      <h1>p5.js로 Arduino<br><em>LED 밝기</em> 조절하기</h1>
+      <p class="lead" style="margin:0">브라우저의 <b>Web Serial</b>로 Arduino Uno R3와 글자를 주고받습니다. 원을 누르면 LED가 켜지고 꺼지며, 슬라이더를 움직이면 <b>PWM</b>으로 밝기가 바뀝니다.</p>
+      <div class="meta">
+        <span class="chip">p5.js 1.11</span><span class="chip">Web Serial API</span><span class="chip">9600 baud</span><span class="chip">PWM 0–255</span>
+      </div>
+      <div class="btns">
+        <a class="btn primary" href="demo/">▶ 직접 실행해 보기</a>
+        <a class="btn ghost" href="#code">코드 설명 보기</a>
+        <a class="btn ghost" href="#demo">시연 영상</a>
+      </div>
+    </div>
+    <div class="mock glass" aria-label="실행 화면 미리보기">
+      <div class="screen">
+        <div class="t1">Arduino Uno R3 · Web Serial</div>
+        <div class="t2" id="mockStatus">전송: PWM:180 · 9600 baud</div>
+        <div class="led" id="mockLed" role="button" tabindex="0" aria-label="LED 토글">ON</div>
+        <div class="t3">원을 클릭하면 LED 토글</div>
+        <div class="t4" id="mockVal">밝기: 180 / 255</div>
+      </div>
+      <input type="range" min="0" max="255" value="180" id="mockSlider" aria-label="LED 밝기 조절">
+      <div class="lbl"><span>LED 밝기 조절</span><span>0 ↔ 255</span></div>
+      <div class="tx" id="mockTx">→ Arduino: "PWM:180\n"</div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- ============ 01 개요 ============ -->
+<section id="overview">
+  <span class="eyebrow"><b>01</b>Overview</span>
+  <h2>무엇을 하는 프로그램인가요?</h2>
+  <p class="lead">브라우저와 Arduino가 USB 케이블로 <b>텍스트를 한 줄씩</b> 주고받습니다. 기능은 세 가지입니다.</p>
+  <div class="grid g3">
+    <div class="feat glass">
+      <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#86efac" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 4v8"/></svg></div>
+      <h3>원 클릭 → 켜기 / 끄기</h3>
+      <p>화면의 원을 누르면 Arduino로 명령을 보냅니다.</p>
+      <div class="msg"><span class="tag">ON</span> <span class="tag">OFF</span></div>
+    </div>
+    <div class="feat glass">
+      <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#86efac" stroke-width="2"><path d="M3 12h18"/><circle cx="15" cy="12" r="3" fill="#86efac"/></svg></div>
+      <h3>슬라이더 → 밝기</h3>
+      <p>0~255 값을 바뀔 때마다 보내 LED 밝기를 조절합니다.</p>
+      <div class="msg"><span class="tag">PWM:0</span> ~ <span class="tag">PWM:255</span></div>
+    </div>
+    <div class="feat glass">
+      <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#93c5fd" stroke-width="2"><path d="M20 12H5"/><path d="M10 7l-5 5 5 5"/></svg></div>
+      <h3>Arduino 응답 → 화면</h3>
+      <p>Arduino가 LED 상태를 알려 주면 원의 ON/OFF를 맞춥니다.</p>
+      <div class="msg"><span class="tag b">LED: ON</span> <span class="tag b">LED: OFF</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 02 회로 ============ -->
+<section id="circuit">
+  <span class="eyebrow"><b>02</b>Circuit</span>
+  <h2>회로 구성</h2>
+  <p class="lead">LED 하나와 저항 하나를 <b>직렬</b>로 연결했습니다. 밝기 조절을 위해 PWM(~ 표시)이 되는 <b>D6</b> 핀을 사용합니다.</p>
+  <div class="circuit">
+    <figure class="glass">
+      <img src="assets/circuit.png" alt="Arduino Uno D6 핀에서 저항과 LED를 거쳐 GND로 연결된 브레드보드 회로도">
+      <figcaption>Fritzing 회로도 · 초록 선 = D6, 검은 선 = GND</figcaption>
+    </figure>
+    <div class="path glass">
+      <h3>전류가 흐르는 길</h3>
+      <ol>
+        <li><span class="n">D6</span><div><b>Arduino ~6번 핀</b><span>PWM 출력 핀 (초록 선)</span></div></li>
+        <li><span class="n">R</span><div><b>저항</b><span>LED에 흐르는 전류를 제한</span></div></li>
+        <li><span class="n">+</span><div><b>LED 긴 다리 (애노드)</b><span>전류가 들어가는 쪽</span></div></li>
+        <li><span class="n">−</span><div><b>LED 짧은 다리 (캐소드)</b><span>전류가 나가는 쪽</span></div></li>
+        <li><span class="n">GND</span><div><b>Arduino GND</b><span>회로가 닫힘 (검은 선)</span></div></li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="pwm glass">
+    <div>
+      <h3>PWM으로 밝기를 바꾸는 원리</h3>
+      <p style="color:var(--ink-2);font-size:15px;margin-top:8px">디지털 핀은 5 V 아니면 0 V만 낼 수 있습니다. 그래서 아주 빠르게 켜고 끄면서 <b>켜져 있는 시간의 비율</b>을 바꿉니다. 비율이 클수록 눈에는 더 밝게 보입니다.</p>
+      <input type="range" min="0" max="255" value="128" id="pwmSlider" aria-label="PWM 값">
+      <div class="read" id="pwmRead">PWM:128 → 켜짐 비율 50%</div>
+    </div>
+    <svg viewBox="0 0 520 170" aria-label="PWM 파형">
+      <text x="0" y="22" fill="rgba(230,238,255,.5)" font-size="12" font-family="IBM Plex Mono">5V</text>
+      <text x="0" y="132" fill="rgba(230,238,255,.5)" font-size="12" font-family="IBM Plex Mono">0V</text>
+      <line x1="30" y1="128" x2="515" y2="128" stroke="rgba(255,255,255,.2)"/>
+      <line x1="30" y1="18" x2="515" y2="18" stroke="rgba(255,255,255,.08)" stroke-dasharray="4 4"/>
+      <path id="pwmWave" fill="none" stroke="#4ade80" stroke-width="3" stroke-linejoin="round"/>
+      <text x="30" y="160" fill="rgba(230,238,255,.5)" font-size="12" font-family="Noto Sans KR">한 칸 = 약 1 ms (Uno D6 핀 PWM 약 980 Hz)</text>
+    </svg>
+  </div>
+</section>
+
+<!-- ============ 03 통신 ============ -->
+<section id="protocol">
+  <span class="eyebrow"><b>03</b>Protocol</span>
+  <h2>브라우저 ↔ Arduino 통신 규칙</h2>
+  <p class="lead">메시지 하나 = 텍스트 한 줄(끝에 줄바꿈 <code class="i">\n</code>). 통신 속도는 양쪽 모두 9600 baud입니다.</p>
+  <div class="flow glass">
+    <div class="node">
+      <div class="k">BROWSER</div>
+      <h3>p5.js 스케치</h3>
+      <p>Chrome / Edge<br>원 클릭 · 슬라이더</p>
+    </div>
+    <div class="lanes">
+      <div class="lane"><span class="arrow"></span>
+        <div class="dir"><span>보내기 (p5 → Arduino)</span><span>serial.send()</span></div>
+        <div class="msgs"><span class="tag">ON</span><span class="tag">OFF</span><span class="tag">PWM:0~255</span></div>
+      </div>
+      <div class="lane back"><span class="arrow"></span>
+        <div class="dir"><span>받기 (Arduino → p5)</span><span>receiveLine()</span></div>
+        <div class="msgs"><span class="tag b">LED: ON</span><span class="tag b">LED: OFF</span></div>
+      </div>
+    </div>
+    <div class="node">
+      <div class="k">USB · 9600 baud</div>
+      <h3>Arduino Uno R3</h3>
+      <p>D6 핀 LED<br>명령을 읽고 출력</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 04 코드 ============ -->
+<section id="code">
+  <span class="eyebrow"><b>04</b>Code</span>
+  <h2>코드 설명</h2>
+  <p class="lead">프로젝트는 파일 3개입니다. 핵심은 <code class="i">sketch.js</code>이고, 복잡한 통신은 <code class="i">serial-helper.js</code>가 맡습니다.</p>
+
+  <div class="files glass">
+    <div class="file"><div class="name"><i style="background:#fb923c"></i>index.html</div><p>p5.js 라이브러리 → serial-helper.js → sketch.js 순서로 불러옵니다. 도우미를 먼저 불러야 스케치에서 쓸 수 있습니다.</p></div>
+    <div class="file"><div class="name"><i style="background:#60a5fa"></i>serial-helper.js</div><p>포트 열기·닫기, 한 줄씩 읽기, 보내기를 담당하는 <b>SerialHelper</b> 클래스. (강의 예제 그대로 사용)</p></div>
+    <div class="file"><div class="name"><i style="background:#4ade80"></i>sketch.js</div><p>화면 그리기, 클릭·슬라이더 처리, 받은 메시지 해석. <b>이번 과제에서 직접 수정한 파일</b>입니다.</p></div>
+  </div>
+
+  <!-- 함수 구조 한눈에 -->
+  <div class="fn-title"><h3>sketch.js 한눈에 보기</h3></div>
+  <p class="fn-desc">함수 5개가 전역 변수를 바꾸고, <code class="i">draw()</code>가 그 변수로 화면을 그립니다.</p>
+  <div class="grid g3" style="margin-bottom:8px">
+    <div class="feat glass"><h3 style="font-family:'IBM Plex Mono'">setup()</h3><p>시작할 때 1번 · 캔버스, 버튼, 슬라이더 준비</p></div>
+    <div class="feat glass"><h3 style="font-family:'IBM Plex Mono'">draw()</h3><p>1초에 약 60번 · 슬라이더 읽기 + 화면 그리기</p></div>
+    <div class="feat glass"><h3 style="font-family:'IBM Plex Mono'">sendBrightness()</h3><p>draw()가 매번 호출 · 조건이 맞을 때만 PWM 전송</p></div>
+    <div class="feat glass"><h3 style="font-family:'IBM Plex Mono'">mousePressed()</h3><p>마우스를 누를 때 · 원 안이면 ON/OFF 전송</p></div>
+    <div class="feat glass"><h3 style="font-family:'IBM Plex Mono'">receiveLine()</h3><p>Arduino가 한 줄 보낼 때 · LED 상태 반영</p></div>
+    <div class="feat glass"><h3 style="font-family:'IBM Plex Mono'">SerialHelper</h3><p>toggle() 연결/해제 · send() 보내기</p></div>
+  </div>
+
+  <!-- 전역 변수 -->
+  <div class="fn-title"><h3>전역 변수</h3><span class="when">모든 함수가 함께 사용</span></div>
+  <p class="fn-desc">함수 밖에서 <code class="i">let</code>으로 선언해 어느 함수에서나 읽고 바꿀 수 있습니다. <span style="color:var(--amber)">새로 추가</span> 표시는 원본에 없던 변수입니다.</p>
+  <div class="tbl glass">
+    <table>
+      <thead><tr><th>변수</th><th>처음 값</th><th>기억하는 것</th></tr></thead>
+      <tbody>
+        <tr><td>serial</td><td>setup()에서 만듦</td><td>Arduino와 통신하는 도우미 객체</td></tr>
+        <tr><td>connectButton</td><td>setup()에서 만듦</td><td>연결 / 해제 버튼</td></tr>
+        <tr><td>ledOn</td><td>false</td><td>LED가 켜졌는지 (true / false)</td></tr>
+        <tr><td>statusText</td><td>'Arduino를 연결해 주세요.'</td><td>화면 위쪽 상태 문구</td></tr>
+        <tr><td>brightnessSlider<span class="new">NEW</span></td><td>setup()에서 만듦</td><td>밝기 슬라이더</td></tr>
+        <tr><td>brightness<span class="new">NEW</span></td><td>255</td><td>현재 밝기 (0 꺼짐 ~ 255 최대)</td></tr>
+        <tr><td>lastSent<span class="new">NEW</span></td><td>-1</td><td>마지막으로 보낸 밝기 (-1 = 아직 안 보냄)</td></tr>
+        <tr><td>lastSendTime<span class="new">NEW</span></td><td>0</td><td>마지막으로 보낸 시각 (ms)</td></tr>
+        <tr><td>connectedAt<span class="new">NEW</span></td><td>0</td><td>연결된 시각 (0 = 연결 전)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- setup -->
+  <div class="fn-title"><h3>setup()</h3><span class="when">시작할 때 1번</span></div>
+  <p class="fn-desc">캔버스, 통신 도우미, 버튼, 슬라이더를 준비합니다.</p>
+  <div class="code-row">
+    <div class="code glass" data-file="sketch.js" data-start="13" data-snippet="setup"></div>
+    <div class="notes">
+      <div class="note glass"><div class="h"><span class="bd">1</span>캔버스 만들기</div><p>가로 600 × 세로 400 픽셀 그림판을 만듭니다.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">2</span>통신 도우미 만들기</div><p>속도 <code class="i">9600</code>, 한 줄을 받으면 <code class="i">receiveLine</code>, 상태가 바뀌면 <code class="i">statusText</code>에 저장하도록 넘겨줍니다.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">3</span>연결 버튼</div><p>누를 때마다 <code class="i">serial.toggle()</code>이 연결과 해제를 번갈아 합니다.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">4</span>밝기 슬라이더</div><p><code class="i">createSlider(최소, 최대, 처음 값, 간격)</code>. 범위 0~255는 Arduino <code class="i">analogWrite()</code>와 같습니다.</p></div>
+    </div>
+  </div>
+
+  <!-- draw -->
+  <div class="fn-title"><h3>draw()</h3><span class="when">1초에 약 60번 반복</span></div>
+  <p class="fn-desc">슬라이더 값을 읽어 전송을 시도하고, 현재 변수 값대로 화면을 다시 그립니다.</p>
+  <div class="code-row">
+    <div class="code glass" data-file="sketch.js" data-start="26" data-snippet="draw"></div>
+    <div class="notes">
+      <div class="note glass"><div class="h"><span class="bd">1</span>슬라이더 읽고 전송</div><p><code class="i">value()</code>로 현재 값을 읽어 <code class="i">brightness</code>에 저장하고 <code class="i">sendBrightness()</code>를 부릅니다.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">2</span>제목과 상태 문구</div><p><code class="i">statusText</code>가 바뀌면 다음 화면에 바로 보입니다.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">3</span>밝기만큼 진해지는 원</div><p><code class="i">lerpColor(A, B, 비율)</code>는 두 색 사이의 색을 고릅니다. 비율 = <code class="i">brightness / 255</code> (0~1). 꺼져 있으면 회색.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">4</span>안내 문구</div><p>밝기 숫자와 통신 규칙을 아래쪽에 씁니다.</p></div>
+    </div>
+  </div>
+
+  <!-- sendBrightness -->
+  <div class="fn-title"><h3>sendBrightness()</h3><span class="when">draw()가 매번 호출</span></div>
+  <p class="fn-desc">1초에 60번 불리지만 실제로 보내는 건 <b>네 관문을 모두 통과했을 때</b>뿐입니다. 하나라도 걸리면 <code class="i">return</code>으로 바로 끝냅니다.</p>
+  <div class="gates glass">
+    <div class="gate-row">
+      <div class="gate"><div class="q">① 연결됐나?</div><div class="no">아니면 기록 초기화 후 끝</div></div>
+      <div class="gate"><div class="q">② 연결 후 2초 지났나?</div><div class="no">아니면 기다림</div></div>
+      <div class="gate"><div class="q">③ 값이 바뀌었나?</div><div class="no">같으면 안 보냄</div></div>
+      <div class="gate"><div class="q">④ 50 ms 지났나?</div><div class="no">아니면 다음 기회에</div></div>
+      <div class="gate go"><div class="q">⑤ "PWM:값" 전송</div><div style="font-size:12.5px;color:var(--ink-2)">성공 → ledOn 갱신<br>실패 → 다시 시도</div></div>
+    </div>
+    <p class="why"><b>왜 2초?</b> Uno는 시리얼 포트가 열리면 보드가 재시작합니다. 재시작 중에 보낸 글자는 사라지므로 잠시 기다립니다. <b>왜 50 ms?</b> 슬라이더를 끌 때 값이 너무 많이 쏟아지지 않도록 1초에 최대 20번만 보냅니다.</p>
+  </div>
+  <div class="code-row">
+    <div class="code glass" data-file="sketch.js" data-start="50" data-snippet="send"></div>
+    <div class="notes">
+      <div class="note glass"><div class="h"><span class="bd">1</span>연결 전이면 초기화</div><p><code class="i">serial.writer</code>가 없으면 연결 전입니다. 다음 연결 때 처음부터 다시 보내도록 기록을 지웁니다.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">2</span>시간 확인</div><p><code class="i">millis()</code>는 스케치가 시작된 뒤 흐른 시간(ms). 빼기로 경과 시간을 잽니다.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">3</span>중복·과다 전송 막기</div><p>값이 그대로이거나 50 ms가 안 됐으면 보내지 않습니다.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">4</span>보내고 결과 반영</div><p><code class="i">await</code>로 전송 결과를 기다립니다. 성공하면 0보다 클 때 켜짐, 실패하면 <code class="i">lastSent = -1</code>로 되돌려 다시 시도합니다.</p></div>
+    </div>
+  </div>
+
+  <!-- mousePressed -->
+  <div class="fn-title"><h3>mousePressed()</h3><span class="when">마우스를 누를 때마다</span></div>
+  <p class="fn-desc">원 안을 눌렀을 때만 ON/OFF를 보내고, <b>전송에 성공했을 때만</b> 화면 상태를 바꿉니다.</p>
+  <div class="code-row">
+    <div class="code glass" data-file="sketch.js" data-start="66" data-snippet="mouse"></div>
+    <div class="notes">
+      <div class="note glass"><div class="h"><span class="bd">1</span>원 밖이면 끝</div><p><code class="i">dist()</code>로 원 중심(300, 190)까지 거리를 잽니다. 반지름 65(지름 130의 절반)보다 멀면 무시.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">2</span>반대 값 계산</div><p><code class="i">!</code>는 true ↔ false 뒤집기.</p></div>
+      <div class="note glass"><div class="h"><span class="bd">3</span>보내고 성공 시 반영</div><p>삼항 연산자 <code class="i">조건 ? A : B</code>로 'ON'/'OFF'를 고릅니다. 화면과 실제 LED가 어긋나지 않습니다.</p></div>
+    </div>
+  </div>
+
+  <!-- receiveLine -->
+  <div class="fn-title"><h3>receiveLine(line)</h3><span class="when">Arduino가 한 줄 보낼 때마다</span></div>
+  <p class="fn-desc">직접 부르지 않습니다. SerialHelper가 한 줄이 완성될 때마다 대신 호출합니다.</p>
+  <div class="code-row">
+    <div class="code glass" data-file="sketch.js" data-start="72" data-snippet="recv"></div>
+    <div class="notes">
+      <div class="note glass"><div class="h"><span class="bd">1</span>정리하기</div><p><code class="i">trim()</code>으로 앞뒤 공백 제거, <code class="i">toUpperCase()</code>로 대문자. <code class="i">" led: on "</code> → <code class="i">"LED: ON"</code></p></div>
+      <div class="note glass"><div class="h"><span class="bd">2</span>켜짐 / 꺼짐 판단</div><p>Arduino가 보내는 <code class="i">LED: ON</code>(콜론 뒤 공백 포함) 또는 <code class="i">ON</code>을 받으면 켜짐. OFF도 같은 방식.</p></div>
+    </div>
+  </div>
+
+  <!-- SerialHelper -->
+  <div class="fn-title"><h3>SerialHelper</h3><span class="when">serial-helper.js</span></div>
+  <p class="fn-desc">스케치에서는 아래 두 가지만 씁니다. 포트를 열고 데이터를 읽는 세부 과정은 이 클래스 안에 숨어 있습니다.</p>
+  <div class="grid g2">
+    <div class="feat glass">
+      <h3 style="font-family:'IBM Plex Mono'">toggle()</h3>
+      <p>끊겨 있으면 → 포트 선택 창 → 9600 baud로 열기 → 읽기 시작<br>연결돼 있으면 → 연결 해제</p>
+    </div>
+    <div class="feat glass">
+      <h3 style="font-family:'IBM Plex Mono'">send(텍스트)</h3>
+      <p>글자 끝에 <code class="i">\n</code>을 붙여 보냅니다. 성공하면 <code class="i">true</code>, 연결 전이거나 실패하면 <code class="i">false</code>.</p>
+    </div>
+    <div class="feat glass">
+      <h3 style="font-family:'IBM Plex Mono'">readLines()</h3>
+      <p>받은 조각을 모았다가 <code class="i">\n</code>이 나오면 한 줄로 잘라 <code class="i">receiveLine</code>에 넘깁니다.</p>
+    </div>
+    <div class="feat glass">
+      <h3 style="font-family:'IBM Plex Mono'">writer</h3>
+      <p>연결되면 생기고 해제되면 <code class="i">null</code>. sendBrightness()가 연결 여부를 확인할 때 사용합니다.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 05 바꾼 점 ============ -->
+<section id="diff">
+  <span class="eyebrow"><b>05</b>Changes</span>
+  <h2>원본 예제에서 바꾼 점</h2>
+  <p class="lead">강의 예제는 Arduino의 가변저항 값을 <b>받아서</b> 보여 줬다면, 이번 과제는 브라우저에서 밝기를 <b>보내서</b> LED를 조절합니다.</p>
+  <div class="cmp">
+    <div class="glass">
+      <span class="badge">원본 예제</span>
+      <h3 style="margin-top:10px">LED 토글 + 가변저항 표시</h3>
+      <ul>
+        <li>가변저항 A0 값을 받아 막대로 표시</li>
+        <li><code class="i">receiveLine()</code>이 정규식으로 숫자 해석</li>
+        <li>원 위치 (160, 175), 지름 110</li>
+        <li>원 색: 초록 / 회색 두 가지</li>
+      </ul>
+    </div>
+    <div class="glass after">
+      <span class="badge">이번 과제</span>
+      <h3 style="margin-top:10px">LED 토글 + 밝기 슬라이더</h3>
+      <ul>
+        <li>슬라이더 0~255 → <code class="i">PWM:값</code> 전송</li>
+        <li><code class="i">sendBrightness()</code> 추가 (2초 대기·중복 방지·50 ms 제한)</li>
+        <li>원을 가운데 (300, 190), 지름 130으로 이동</li>
+        <li><code class="i">lerpColor()</code>로 밝기만큼 진해지는 색</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 06 시연 ============ -->
+<section id="demo">
+  <span class="eyebrow"><b>06</b>Demo</span>
+  <h2>시연 영상</h2>
+  <p class="lead">p5.js 화면에서 원을 누르고 슬라이더를 움직이면 브레드보드의 LED가 함께 반응합니다.</p>
+  <div class="video glass">
+    <video src="assets/demo.mp4" poster="assets/poster.jpg" controls playsinline preload="metadata"></video>
+    <div class="cap"><span class="chip">① 연결 / 해제 버튼으로 포트 연결</span><span class="chip">② 원 클릭 → ON / OFF</span><span class="chip">③ 슬라이더 → 밝기 변화</span></div>
+  </div>
+  <p style="color:var(--ink-3);font-size:14px;margin-top:14px">직접 실행하려면 Chrome 또는 Edge에서 <a href="demo/" style="color:var(--green-2)">demo 페이지</a>를 열고 Arduino를 USB로 연결하세요. (Web Serial은 https 또는 localhost에서만 동작합니다.)</p>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <div class="glass">
+    <div><b style="color:var(--ink)">박강민</b> · 인천대학교 임베디드시스템공학과 · 창의설계입문</div>
+    <div>참고: 강의자료 「p5.js로 Arduino와 대화하기」 · <a href="https://editor.p5js.org/bjc97r/sketches/04Ur1M6iy" target="_blank" rel="noopener">원본 p5.js 예제</a></div>
+  </div>
+</footer>
+
+<script>
+/* ---------- 코드 조각 (번호|코드) ---------- */
+const SNIPPETS = {
+setup: `|function setup() {
+1|  createCanvas(600, 400);
+|  textFont('sans-serif');
+2|  serial = new SerialHelper(9600, receiveLine, message => statusText = message);
+3|  connectButton = createButton('Arduino 연결 / 해제');
+3|  connectButton.mousePressed(() => serial.toggle());
+|
+|  // 0~255 범위 슬라이더 (아두이노 analogWrite 범위와 같음)
+4|  createP('LED 밝기 조절').style('margin', '16px 0 4px');
+4|  brightnessSlider = createSlider(0, 255, brightness, 1);
+4|  brightnessSlider.style('width', '300px');
+|}`,
+draw: `|function draw() {
+|  background(242, 246, 250);
+|
+|  // 슬라이더 값을 읽어서, 바뀌었으면 아두이노로 전송
+1|  brightness = brightnessSlider.value();
+1|  sendBrightness();
+|
+|  fill(25, 40, 60); noStroke(); textAlign(CENTER);
+2|  textSize(24); text('Arduino Uno R3 · Web Serial', width / 2, 36);
+2|  textSize(14); text(statusText, width / 2, 66);
+|
+|  // LED 원: 켜져 있으면 밝기에 따라 회색 → 초록색으로 진해짐
+3|  const offColor = color('#64748b');
+3|  const onColor = color('#22c55e');
+3|  fill(ledOn ? lerpColor(offColor, onColor, brightness / 255) : offColor);
+3|  circle(width / 2, 190, 130);
+|  fill(255); textSize(24); text(ledOn ? 'ON' : 'OFF', width / 2, 198);
+|
+|  fill(25, 40, 60); textSize(15);
+4|  text('원을 클릭하면 LED 토글', width / 2, 290);
+4|  textSize(20); text('밝기: ' + brightness + ' / 255', width / 2, 325);
+4|  textSize(13); text('9600 baud · ON / OFF / PWM:0~255 + 줄바꿈', width / 2, 370);
+|}`,
+send: `|// 밝기 값을 "PWM:값" 형식으로 보냄
+|async function sendBrightness() {
+1|  if (!serial.writer) {                          // 아직 연결 전이면 보내지 않음
+1|    connectedAt = 0; lastSent = -1; return;
+|  }
+2|  if (connectedAt === 0) connectedAt = millis(); // 방금 연결된 시각 기록
+2|  if (millis() - connectedAt < 2000) return;     // 연결 직후 2초는 보드가 재시작 중이라 기다림
+3|  if (brightness === lastSent) return;           // 값이 그대로면 보내지 않음
+3|  if (millis() - lastSendTime < 50) return;      // 0.05초에 한 번까지만 보냄
+|  lastSendTime = millis();
+|  const value = brightness;
+|  lastSent = value;
+4|  if (await serial.send('PWM:' + value)) ledOn = value > 0;
+4|  else lastSent = -1;                            // 실패하면 다음에 다시 시도
+|}`,
+mouse: `|async function mousePressed() {
+1|  if (dist(mouseX, mouseY, width / 2, 190) > 65) return;
+2|  const next = !ledOn;
+3|  if (await serial.send(next ? 'ON' : 'OFF')) ledOn = next;
+|}`,
+recv: `|function receiveLine(line) {
+|  // 아두이노가 LED 상태를 알려 주면 화면에 반영합니다.
+1|  const message = line.trim().toUpperCase();
+2|  if (message === 'LED: ON' || message === 'ON') ledOn = true;
+2|  else if (message === 'LED: OFF' || message === 'OFF') ledOn = false;
+|}`
+};
+
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const KW = /^(let|const|function|async|await|if|else|return|new)$/;
+const BUILTIN = /^(true|false|width|height|mouseX|mouseY|CENTER)$/;
+function highlight(src){
+  const re = /(\/\/.*$)|('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)/g;
+  let out = '', last = 0, m;
+  while ((m = re.exec(src))) {
+    out += esc(src.slice(last, m.index));
+    const t = m[0];
+    if (m[1]) out += `<span class="tk-c">${esc(t)}</span>`;
+    else if (m[2]) out += `<span class="tk-s">${esc(t)}</span>`;
+    else if (m[3]) out += `<span class="tk-n">${t}</span>`;
+    else if (KW.test(t)) out += `<span class="tk-k">${t}</span>`;
+    else if (BUILTIN.test(t)) out += `<span class="tk-b">${t}</span>`;
+    else if (src[re.lastIndex] === '(') out += `<span class="tk-f">${t}</span>`;
+    else out += t;
+    last = re.lastIndex;
+  }
+  return out + esc(src.slice(last));
+}
+document.querySelectorAll('.code[data-snippet]').forEach(box => {
+  const lines = SNIPPETS[box.dataset.snippet].split('\n');
+  let no = +box.dataset.start, prev = '';
+  const body = lines.map(raw => {
+    const i = raw.indexOf('|');
+    const mark = raw.slice(0, i), code = raw.slice(i + 1);
+    const badge = mark && mark !== prev ? `<span class="bd">${mark}</span>` : '';
+    prev = mark;
+    return `<div class="ln${mark ? ' m' : ''}"><span class="gut">${badge}</span><span class="no">${no++}</span><span>${highlight(code) || ' '}</span></div>`;
+  }).join('');
+  box.innerHTML = `<div class="head"><span class="lights"><i></i><i></i><i></i></span>${box.dataset.file}</div><pre><code>${body}</code></pre>`;
+});
+
+/* ---------- 미니 화면: sketch.js 동작을 그대로 흉내 ---------- */
+const off = [0x64,0x74,0x8b], on = [0x22,0xc5,0x5e];
+const lerp = (a,b,t) => `rgb(${a.map((v,i)=>Math.round(v+(b[i]-v)*t)).join(',')})`;
+const mLed = document.getElementById('mockLed'), mSl = document.getElementById('mockSlider');
+let mockOn = true;
+function paintMock(msg){
+  const b = +mSl.value;
+  mLed.style.background = mockOn ? lerp(off,on,b/255) : lerp(off,off,0);
+  mLed.style.boxShadow = mockOn ? `0 0 ${10+b/6}px rgba(34,197,94,${b/400})` : 'none';
+  mLed.textContent = mockOn ? 'ON' : 'OFF';
+  document.getElementById('mockVal').textContent = `밝기: ${b} / 255`;
+  if (msg) {
+    document.getElementById('mockStatus').textContent = `전송: ${msg} · 9600 baud`;
+    document.getElementById('mockTx').textContent = `→ Arduino: "${msg}\\n"`;
+  }
+}
+mSl.addEventListener('input', () => { mockOn = +mSl.value > 0; paintMock('PWM:' + mSl.value); });
+const toggle = () => { mockOn = !mockOn; paintMock(mockOn ? 'ON' : 'OFF'); };
+mLed.addEventListener('click', toggle);
+mLed.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+paintMock();
+
+/* ---------- PWM 파형 ---------- */
+const pSl = document.getElementById('pwmSlider'), wave = document.getElementById('pwmWave');
+function drawWave(){
+  const v = +pSl.value, duty = v / 255, x0 = 30, period = 97, hi = 18, lo = 128;
+  let d = `M${x0} ${lo}`;
+  for (let k = 0; k < 5; k++) {
+    const s = x0 + k * period, e = s + period * duty;
+    if (duty > 0) d += ` L${s} ${hi} L${e} ${hi} L${e} ${lo}`;
+    d += ` L${s + period} ${lo}`;
+  }
+  wave.setAttribute('d', d);
+  document.getElementById('pwmRead').textContent = `PWM:${v} → 켜짐 비율 ${Math.round(duty*100)}%`;
+}
+pSl.addEventListener('input', drawWave); drawWave();
+</script>
+</body>
+</html>
